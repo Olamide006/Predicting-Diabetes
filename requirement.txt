@@ -1,6 +1,9 @@
+streamlit
+scikit-learn
+shap
 pandas
 numpy
-scikit-learn
-joblib
 matplotlib
-seaborn
+imbalanced-learn
+biopython
+faiss-cpu
