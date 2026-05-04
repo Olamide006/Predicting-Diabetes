@@ -227,7 +227,7 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
             'bmi':                     'BMI',
             'family_history_diabetes': 'Family History of Diabetes',
             'previous_gdm':            'Gestational Diabetes History',
-            'physically_active':       'Physical Activity',
+            'physically_active':       'Physical Activity Level',
             'has_hypertension':        'Hypertension',
         }
 
@@ -272,7 +272,7 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
                         clinical_direction = "decreases" if val_for_icon == 1 else "increases"
                     else:
                         clinical_direction = "increases" if val_for_icon == 1 else "decreases"
-                    icon             = "🔴" if clinical_direction == "increases" else "🟢"
+                    icon             = "🟢" if clinical_direction == "increases" else "🔴"
                     header_direction = clinical_direction
 
                 elif feat == 'age':
