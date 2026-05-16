@@ -166,7 +166,9 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
         # ── SHAP CHART ─────────────────────────────────────────
         st.subheader("Why This Prediction?")
         st.markdown(
-            "The chart below shows which factors contributed most to this prediction."
+            "The chart below shows which factors contributed most to this prediction. "
+            "Red bars increase risk, green bars decrease risk. "
+            "Longer bars indicate stronger influence on the prediction."
         )
 
         feature_names = [
@@ -185,9 +187,14 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
 
         shap_vals = np.array(shap_vals).flatten()[:len(feature_names)]
 
+        # Sort by absolute SHAP value for better visualisation
+        sorted_idx    = np.argsort(np.abs(shap_vals))
+        sorted_names  = [feature_names[i] for i in sorted_idx]
+        sorted_vals   = shap_vals[sorted_idx]
+        sorted_colors = ['#e74c3c' if v > 0 else '#2ecc71' for v in sorted_vals]
+
         fig, ax = plt.subplots(figsize=(8, 4))
-        colors  = ['#e74c3c' if v > 0 else '#2ecc71' for v in shap_vals]
-        ax.barh(feature_names, shap_vals, color=colors)
+        ax.barh(sorted_names, sorted_vals, color=sorted_colors)
         ax.axvline(x=0, color='black', linewidth=0.8)
         ax.set_xlabel("SHAP Value (Impact on Prediction)")
         ax.set_title(f"Feature Contributions for {prediction_label} Prediction")
@@ -200,7 +207,9 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
         st.subheader("📄 Research Evidence (RAG-Enhanced)")
         st.markdown(
             "Explanations below are generated for your specific risk profile "
-            "and supported by peer-reviewed research from PubMed (2015–2025)."
+            "and supported by peer-reviewed research manually selected from "
+            "PubMed (2015–2025). Features are ranked by their SHAP influence "
+            "on the prediction — strongest contributors appear first."
         )
 
         feature_keys = [
@@ -231,13 +240,7 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
             'has_hypertension':        'Hypertension',
         }
 
-        clinical_risk_features = {
-            'family_history_diabetes': family_enc,
-            'previous_gdm':            gdm_enc,
-            'has_hypertension':        hyper_enc,
-            'physically_active':       active_enc,
-        }
-
+        # Sort features by SHAP magnitude — strongest first (SHAP triage)
         top_features = sorted(
             zip(feature_keys, input_values, shap_vals),
             key=lambda x: abs(x[2]),
@@ -256,8 +259,13 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
                     continue
 
                 retriever_key = feature_name_map.get(feat, feat)
-                papers        = rag.retrieve_for_feature(retriever_key, top_k=3)
-                label         = feature_display.get(
+
+                # ── SHAP TRIAGE — mathematically driven, no if/else ──
+                # Higher SHAP magnitude = more papers retrieved
+                top_k  = max(1, min(5, round(abs(shap_val) * 50)))
+                papers = rag.retrieve_for_feature(retriever_key, top_k=top_k)
+
+                label = feature_display.get(
                     feat, feat.replace('_', ' ').title()
                 )
 
@@ -265,38 +273,15 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
                     retriever_key, val, shap_val, prediction_label, papers
                 )
 
-                # ── Determine icon and header direction ───────
-                if feat in clinical_risk_features:
-                    val_for_icon = clinical_risk_features[feat]
-                    if feat == 'physically_active':
-                        clinical_direction = "decreases" if val_for_icon == 1 else "increases"
-                    else:
-                        clinical_direction = "increases" if val_for_icon == 1 else "decreases"
-                    icon             = "🔴" if clinical_direction == "increases" else "🟢"
-                    
-                    header_direction = clinical_direction
-
-                elif feat == 'age':
-                    if age >= 45:
-                        icon, header_direction = "🔴", "increases"
-                    elif age >= 35:
-                        icon, header_direction = "🟡", "moderately influences"
-                    else:
-                        icon, header_direction = "🟢", "minimally influences"
-
-                elif feat == 'bmi':
-                    if bmi >= 25:
-                        icon, header_direction = "🔴", "increases"
-                    else:
-                        icon, header_direction = "🟢", "decreases"
-
-                else:
-                    icon             = "🔴" if direction == "increases" else "🟢"
-                    header_direction = direction
+                # ── Icon driven entirely by SHAP direction ────
+                icon             = "🔴" if shap_val > 0 else "🟢"
+                header_direction = direction
 
                 # ── Expander content ──────────────────────────
-                with st.expander(f"{icon} {label} — {header_direction} your risk"):
-
+                with st.expander(
+                    f"{icon} {label} — {strength} {header_direction} your risk "
+                    f"(SHAP: {shap_val:+.3f})"
+                ):
                     st.markdown("**What this means for you:**")
                     st.write(summary)
 
@@ -308,9 +293,6 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
                             snippet       = clean_snippet[:200].rsplit(' ', 1)[0] + "..."
                             st.write(f"**{i}.** {clean_title} ({paper['year']})")
                             st.write(snippet)
-                            st.write(
-                                f"https://pubmed.ncbi.nlm.nih.gov/{paper['pmid']}/"
-                            )
                             if i < len(papers):
                                 st.write("---")
                     else:

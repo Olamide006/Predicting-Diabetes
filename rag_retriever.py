@@ -9,33 +9,16 @@ import re
 INDEX_FILE = "rag_index.faiss"
 META_FILE  = "rag_metadata.pkl"
 
-RELEVANCE_THRESHOLD = 0.18
-
-def clean_abstract(text):
-    """Strip HTML tags, section labels, and clean up PubMed abstract text."""
-    # Strip HTML tags first
-    text = re.sub(r'<[^>]+>', '', text)
-    # Remove section labels at the start or after punctuation
-    text = re.sub(
-        r'(^|\.\s*)(Background|Objective|Objectives|Methods|Method|Results|Result|'
-        r'Conclusion|Conclusions|Purpose|Aims|Aim|Introduction|Discussion|Findings)'
-        r'\s*:\s*',
-        r'\1',
-        text,
-        flags=re.IGNORECASE
-    )
-    # Clean up extra whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+RELEVANCE_THRESHOLD = 0.10  # lowered because we now use full PDF text
 
 FEATURE_QUERIES = {
-    "age":                 "age older adults type 2 diabetes risk insulin resistance",
-    "bmi":                 "BMI obesity overweight type 2 diabetes risk insulin resistance",
-    "sex":                 "sex gender differences type 2 diabetes risk women men",
-    "family_history":      "family history genetic hereditary type 2 diabetes risk",
-    "gestational_diabetes":"gestational diabetes mellitus future type 2 diabetes risk women",
-    "physical_activity":   "physical activity exercise inactivity type 2 diabetes prevention",
-    "hypertension":        "hypertension high blood pressure type 2 diabetes risk",
+    "age":                  "aging older adults diabetes incidence risk Africa age-related",
+    "bmi":                  "BMI body mass index obesity overweight diabetes Africa adiposity",
+    "sex":                  "sex gender women men diabetes differences hormones",
+    "family_history":       "family history genetic hereditary diabetes offspring parental",
+    "gestational_diabetes": "gestational diabetes GDM pregnancy postpartum future diabetes",
+    "physical_activity":    "physical activity exercise sedentary inactivity diabetes prevention",
+    "hypertension":         "hypertension blood pressure diabetes comorbidity risk",
 }
 
 DIABETES_KEYWORDS = [
@@ -44,10 +27,59 @@ DIABETES_KEYWORDS = [
 ]
 
 
+def clean_text(text):
+    """Clean extracted PDF text."""
+    if not text:
+        return ""
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def extract_evidence_sentences(full_text, feature_name, max_sentences=2):
+    """
+    Extract the most relevant sentences from a paper's full text
+    based on the feature being explained.
+    """
+    feature_keywords = {
+        "age":                  ["age", "older", "aging", "elderly", "middle-aged", "years old"],
+        "bmi":                  ["bmi", "obesity", "obese", "overweight", "body mass", "adipos"],
+        "sex":                  ["sex", "gender", "women", "female", "male", "men"],
+        "family_history":       ["family history", "genetic", "hereditary", "offspring", "parental", "first-degree"],
+        "gestational_diabetes": ["gestational", "gdm", "pregnancy", "postpartum", "obstetric"],
+        "physical_activity":    ["physical activity", "exercise", "sedentary", "inactivity", "walking"],
+        "hypertension":         ["hypertension", "blood pressure", "systolic", "diastolic"],
+    }
+
+    key = feature_name.lower().replace(" ", "_")
+    keywords = feature_keywords.get(key, [feature_name])
+
+    # Split into sentences
+    sentences = re.split(r'(?<=[.!?])\s+', full_text)
+
+    relevant = []
+    for sent in sentences:
+        sent = sent.strip()
+        if len(sent) < 40 or len(sent) > 400:
+            continue
+        sent_lower = sent.lower()
+        # Must contain a diabetes keyword AND a feature keyword
+        has_diabetes = any(kw in sent_lower for kw in DIABETES_KEYWORDS)
+        has_feature  = any(kw in sent_lower for kw in keywords)
+        if has_diabetes and has_feature:
+            relevant.append(sent)
+
+    return relevant[:max_sentences]
+
 
 def build_explanation(feature_name, feature_value, shap_value, prediction_label, papers):
+    """
+    Build a paper-grounded explanation for a feature's contribution.
+    SHAP value determines strength/direction.
+    Papers provide the actual evidence sentences.
+    """
     direction = "increases" if shap_value > 0 else "decreases"
-    strength = (
+    strength  = (
         "strongly"   if abs(shap_value) > 0.1  else
         "moderately" if abs(shap_value) > 0.05 else
         "slightly"
@@ -55,155 +87,164 @@ def build_explanation(feature_name, feature_value, shap_value, prediction_label,
 
     key = feature_name.lower().replace(" ", "_")
 
+    # ── Patient-facing opening based on feature + value ──────────────
     if key == "age":
         age = int(feature_value)
         if age >= 45:
-            detail = (
-                f"At {age} years old, age is one of the most significant factors in your result. "
-                f"The risk of type 2 diabetes rises substantially after age 45, as the body "
-                f"gradually loses insulin sensitivity and pancreatic beta-cell function declines. "
-                f"Regular blood glucose screening is strongly recommended at this age."
+            opening = (
+                f"At {age} years old, age is a significant factor in this prediction. "
+                f"Research consistently shows that diabetes risk rises substantially after age 45 "
+                f"as insulin sensitivity declines and pancreatic beta-cell function weakens."
             )
         elif age >= 35:
-            detail = (
+            opening = (
                 f"At {age} years old, you are approaching the age range where diabetes risk "
-                f"begins to increase more sharply. The body's insulin sensitivity starts declining "
-                f"in the mid-30s, making lifestyle habits particularly important at this stage."
+                f"begins to climb more sharply. Insulin sensitivity gradually declines through "
+                f"the mid-30s, making lifestyle habits particularly important at this stage."
             )
         else:
-            detail = (
-                f"At {age} years old, age is a less dominant risk factor on its own. "
-                f"However, diabetes in younger adults is increasingly common, especially when "
-                f"combined with obesity, inactivity, or a family history of diabetes."
+            opening = (
+                f"At {age} years old, age alone is a lower risk factor. However, diabetes in "
+                f"younger adults is rising, particularly when combined with other risk factors "
+                f"such as obesity, inactivity, or family history."
             )
 
     elif key == "bmi":
         bmi = float(feature_value)
         if bmi >= 35:
-            category = "severely obese"
-            advice = (
-                "At this level, the risk of insulin resistance is very high. "
-                "Even a modest weight reduction of 5-10% can significantly improve "
-                "blood sugar regulation and reduce diabetes risk."
+            opening = (
+                f"Your BMI of {bmi:.1f} falls in the severely obese range. "
+                f"At this level, insulin resistance is highly likely and even modest weight "
+                f"loss of 5-10% can significantly improve blood sugar regulation."
             )
         elif bmi >= 30:
-            category = "obese"
-            advice = (
-                "Obesity is one of the strongest modifiable risk factors for type 2 diabetes. "
-                "Excess body fat, particularly around the abdomen, interferes with the body's "
-                "ability to use insulin effectively."
+            opening = (
+                f"Your BMI of {bmi:.1f} falls in the obese range. Excess body fat, "
+                f"particularly around the abdomen, directly impairs the body's ability "
+                f"to use insulin effectively, raising diabetes risk substantially."
             )
         elif bmi >= 25:
-            category = "overweight"
-            advice = (
-                "Being overweight increases strain on the body's insulin-producing cells. "
-                "Maintaining a healthy weight through diet and exercise significantly reduces risk."
+            opening = (
+                f"Your BMI of {bmi:.1f} places you in the overweight range. "
+                f"This puts additional strain on insulin-producing cells and raises "
+                f"your risk of developing type 2 diabetes over time."
             )
         else:
-            category = "healthy weight range"
-            advice = (
-                "Your weight is within a healthy range, which is a positive factor "
-                "for diabetes prevention."
+            opening = (
+                f"Your BMI of {bmi:.1f} is within the healthy range, which is a "
+                f"positive protective factor against type 2 diabetes."
             )
-        detail = f"Your BMI of {bmi:.1f} places you in the {category}. {advice}"
 
     elif key == "sex":
         if feature_value == 0:
-            detail = (
-                "Being female introduces specific diabetes risk factors including hormonal "
-                "changes during menopause, polycystic ovary syndrome (PCOS), and the long-term "
-                "effects of gestational diabetes. Oestrogen decline after menopause can reduce "
-                "insulin sensitivity. Women should monitor blood glucose regularly, particularly "
-                "after age 40 or following a pregnancy with gestational diabetes."
+            opening = (
+                "Being female introduces specific hormonal risk pathways including PCOS, "
+                "menopausal oestrogen decline, and the long-term effects of gestational diabetes. "
+                "These factors can reduce insulin sensitivity and raise diabetes risk over time."
             )
         else:
             if shap_value < 0:
-                detail = (
+                opening = (
                     "Being male is associated with a relatively lower diabetes risk in this "
-                    "profile compared to other factors. While men can develop visceral fat at "
-                    "lower BMI levels, your overall risk profile suggests other factors are "
-                    "more dominant here. Maintaining a healthy weight and staying active "
-                    "remains the best protection."
+                    "profile compared to other factors present. Maintaining a healthy weight "
+                    "and staying active remains the best protection."
                 )
             else:
-                detail = (
-                    "Men tend to develop type 2 diabetes at lower BMI levels than women, "
-                    "suggesting higher susceptibility to insulin resistance even without "
-                    "significant weight gain. Visceral fat accumulation, common in men, "
-                    "is particularly associated with metabolic dysfunction and elevated "
-                    "diabetes risk."
+                opening = (
+                    "Men tend to develop insulin resistance at lower BMI levels than women, "
+                    "often due to visceral fat accumulation even without significant overall "
+                    "weight gain, raising diabetes risk."
                 )
 
     elif key == "family_history":
         if feature_value == 1:
-            detail = (
-                "Having a first-degree relative (parent or sibling) with diabetes roughly doubles "
-                "your risk of developing the condition. Genetic factors influence insulin secretion "
-                "and sensitivity. This makes lifestyle modifications such as healthy diet, regular "
-                "exercise, and weight management especially important for you."
+            opening = (
+                "Having a first-degree relative with diabetes roughly doubles your inherited "
+                "genetic risk. Genetic factors influence both insulin secretion and sensitivity, "
+                "making lifestyle modifications especially important for you."
             )
         else:
-            detail = (
-                "No family history of diabetes reduces your inherited genetic risk. "
+            opening = (
+                "No family history of diabetes means your inherited genetic risk is lower. "
                 "However, lifestyle factors such as poor diet, physical inactivity, and excess "
                 "weight remain important contributors regardless of family history."
             )
 
     elif key == "gestational_diabetes":
         if feature_value == 1:
-            detail = (
-                "A history of gestational diabetes (GDM) is one of the strongest predictors of "
-                "future type 2 diabetes. Women who had GDM have up to a 10-fold increased lifetime "
-                "risk compared to those without. The underlying insulin resistance that caused GDM "
-                "often persists after pregnancy. Regular blood sugar monitoring at least every "
-                "1-3 years is strongly recommended."
+            opening = (
+                "A history of gestational diabetes (GDM) is one of the strongest predictors "
+                "of future type 2 diabetes. Women who had GDM face up to a 10-fold increased "
+                "lifetime risk. The underlying insulin resistance often persists after pregnancy."
             )
         else:
-            detail = (
+            opening = (
                 "No history of gestational diabetes removes one significant risk pathway. "
                 "However, other risk factors can still contribute to diabetes development, "
-                "so maintaining a healthy weight and active lifestyle remains important."
+                "so maintaining a healthy lifestyle remains important."
             )
 
     elif key == "physical_activity":
         if feature_value == 0:
-            detail = (
+            opening = (
                 "Physical inactivity is a major modifiable risk factor for type 2 diabetes. "
-                "Without regular exercise, the body becomes less sensitive to insulin over time, "
-                "leading to higher blood glucose levels. The WHO recommends at least 150 minutes "
-                "of moderate-intensity activity per week such as brisk walking, cycling, or "
-                "swimming. Even small increases in daily movement can make a meaningful difference."
+                "Without regular exercise, the body gradually loses insulin sensitivity, "
+                "leading to higher blood glucose levels over time."
             )
         else:
-            detail = (
-                "Being physically active is one of the most effective ways to reduce diabetes risk. "
-                "Exercise improves insulin sensitivity, helps maintain a healthy weight, and "
-                "directly lowers blood glucose levels. Continue aiming for at least 150 minutes "
-                "of moderate activity per week to maintain this protective effect."
+            opening = (
+                "Being physically active is one of the most effective protections against "
+                "type 2 diabetes. Exercise directly improves insulin sensitivity and helps "
+                "regulate blood glucose levels."
             )
 
     elif key == "hypertension":
         if feature_value == 1:
-            detail = (
-                "Having hypertension significantly increases your diabetes risk. High blood "
-                "pressure and diabetes share common underlying mechanisms including insulin "
-                "resistance, inflammation, and vascular dysfunction. People with hypertension "
-                "are roughly twice as likely to develop type 2 diabetes. Managing blood pressure "
-                "through diet, exercise, and medication where prescribed also helps protect "
-                "against diabetes."
+            opening = (
+                "Hypertension and type 2 diabetes share common underlying mechanisms including "
+                "insulin resistance, inflammation, and vascular dysfunction. People with high "
+                "blood pressure are roughly twice as likely to develop type 2 diabetes."
             )
         else:
-            detail = (
-                "Normal blood pressure is a positive indicator for metabolic health. "
-                "The absence of hypertension reduces one significant risk pathway for diabetes. "
-                "Continue maintaining healthy blood pressure through a balanced diet, regular "
-                "physical activity, and limited salt and alcohol intake."
+            opening = (
+                "Normal blood pressure is a positive metabolic indicator. The absence of "
+                "hypertension reduces one significant pathway toward diabetes development. "
+                "Continue maintaining healthy blood pressure through diet and exercise."
             )
 
     else:
-        detail = (
-            f"This factor {strength} {direction} your diabetes risk based on the model's analysis."
+        opening = (
+            f"This factor {strength} {direction} your diabetes risk "
+            f"based on the model's analysis of your profile."
         )
+
+    # ── SHAP context line ─────────────────────────────────────────────
+    shap_context = (
+        f"The model's analysis shows this factor {strength} {direction} "
+        f"your risk of {prediction_label}."
+    )
+
+    # ── Extract evidence from actual paper text ───────────────────────
+    evidence_parts = []
+    for paper in papers:
+        full_text = paper.get("full_text", paper.get("abstract", ""))
+        full_text = clean_text(full_text)
+        sentences = extract_evidence_sentences(full_text, key)
+        title     = paper.get("title", "").replace(".pdf", "").strip()
+        year      = paper.get("year", "")
+
+        if sentences:
+            evidence_parts.append(
+                f'Research evidence: "{sentences[0]}" '
+                f'(Source: {title[:80]}, {year})'
+            )
+
+    # ── Combine into final explanation ────────────────────────────────
+    if evidence_parts:
+        evidence_block = " | ".join(evidence_parts[:2])  # max 2 paper citations
+        detail = f"{opening} {shap_context} {evidence_block}."
+    else:
+        detail = f"{opening} {shap_context}"
 
     return detail, direction, strength
 
@@ -247,11 +288,11 @@ class RAGRetriever:
                 continue
 
             paper          = self.metadata[idx].copy()
-            abstract_lower = paper['abstract'].lower()
-            title_lower    = paper['title'].lower()
+            full_text      = paper.get("full_text", paper.get("abstract", "")).lower()
+            title_lower    = paper.get("title", "").lower()
 
             is_diabetes_relevant = any(
-                kw in abstract_lower or kw in title_lower
+                kw in full_text or kw in title_lower
                 for kw in DIABETES_KEYWORDS
             )
             if not is_diabetes_relevant:
@@ -283,5 +324,7 @@ if __name__ == "__main__":
         if papers:
             for p in papers:
                 print(f"  [{p['score']:.3f}] {p['title']} ({p['year']})")
+                sentences = p.get("full_text", "")[:500]
+                print(f"  Preview: {sentences[:200]}")
         else:
             print("  No relevant papers found above threshold.")

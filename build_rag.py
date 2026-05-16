@@ -1,53 +1,96 @@
 # build_rag.py
-# Reads papers.json, builds TF-IDF vectors, stores in FAISS index
-# Run this ONCE — it saves the index to disk
+# Reads PDF papers from papers/ subfolders, builds TF-IDF FAISS index
 
-import json
+import os
 import pickle
 import numpy as np
 import faiss
 from sklearn.feature_extraction.text import TfidfVectorizer
+import pymupdf  # pip install pymupdf
 
-PAPERS_FILE  = "papers.json"
-INDEX_FILE   = "rag_index.faiss"
-META_FILE    = "rag_metadata.pkl"
+INDEX_FILE = "rag_index.faiss"
+META_FILE  = "rag_metadata.pkl"
+PAPERS_DIR = "papers"
 
-def load_papers():
-    with open(PAPERS_FILE, "r", encoding="utf-8") as f:
-        papers = json.load(f)
-    print(f"Loaded {len(papers)} papers")
-    return papers
+FEATURE_FOLDERS = [
+    ""
+    "age",
+    "bmi",
+    "sex",
+    "family_history",
+    "gestational_diabetes",
+    "physical_activity",
+    "hypertension",
+]
 
-def build_documents(papers):
-    """Combine title + abstract into one searchable document per paper."""
-    docs = []
+def extract_text_from_pdf(pdf_path):
+    """Extract full text from a PDF file."""
+    try:
+        doc = pymupdf.open(pdf_path)
+        text = ""
+        for page in doc:
+            text += page.get_text()
+        doc.close()
+        return text.strip()
+    except Exception as e:
+        print(f"  ⚠️  Could not read {pdf_path}: {e}")
+        return ""
+
+def load_papers_from_pdfs():
+    """Walk through papers/ subfolders and extract text from each PDF."""
+    docs     = []
     metadata = []
-    for p in papers:
-        text = f"{p['title']}. {p['abstract']}"
-        docs.append(text)
-        metadata.append({
-            "pmid":   p["pmid"],
-            "title":  p["title"],
-            "year":   p["year"],
-            "term":   p["search_term"],
-            "abstract": p["abstract"]
-        })
+    total    = 0
+
+    for folder in FEATURE_FOLDERS:
+        # folder_path = os.path.join(PAPERS_DIR, folder)
+        folder_path = os.path.join(PAPERS_DIR, folder) if folder else PAPERS_DIR
+        if not os.path.exists(folder_path):
+            print(f"⚠️  Folder not found: {folder_path}")
+            continue
+
+        pdf_files = [f for f in os.listdir(folder_path) if f.endswith(".pdf")]
+        print(f"\n📁 {folder}/ — {len(pdf_files)} PDFs found")
+
+        for pdf_file in pdf_files:
+            pdf_path = os.path.join(folder_path, pdf_file)
+            text     = extract_text_from_pdf(pdf_path)
+
+            if not text or len(text) < 100:
+                print(f"  ⚠️  Skipping (too short): {pdf_file}")
+                continue
+
+            # Use first 300 chars as title preview
+            title_preview = text[:200].replace("\n", " ").strip()
+
+            docs.append(text)
+            metadata.append({
+                "title":    pdf_file.replace(".pdf", ""),
+                "abstract": text[:1000],  # first 1000 chars as abstract
+                "full_text": text,
+                "feature":  folder,
+                "source":   pdf_path,
+                "year":     "2015-2025",
+                "pmid":     pdf_file.replace(".pdf", ""),
+            })
+            total += 1
+            print(f"  ✅ {pdf_file[:60]}")
+
+    print(f"\n✅ Total papers loaded: {total}")
     return docs, metadata
 
 def build_index(docs):
     """Convert documents to TF-IDF vectors and store in FAISS."""
-    print("Building TF-IDF vectors...")
+    print("\nBuilding TF-IDF vectors...")
     vectorizer = TfidfVectorizer(
-        max_features=5000,
+        max_features=10000,
         stop_words="english",
-        ngram_range=(1, 2)   # include bigrams like "blood glucose"
+        ngram_range=(1, 2)
     )
     tfidf_matrix = vectorizer.fit_transform(docs)
 
-    # Convert sparse TF-IDF to dense float32 (FAISS requirement)
     dense = tfidf_matrix.toarray().astype(np.float32)
 
-    # Normalise so cosine similarity = dot product (faster search)
     norms = np.linalg.norm(dense, axis=1, keepdims=True)
     norms[norms == 0] = 1
     dense = dense / norms
@@ -55,8 +98,7 @@ def build_index(docs):
     dim = dense.shape[1]
     print(f"Vector dimensions: {dim}")
 
-    # Build FAISS flat index (exact search, fine for 173 docs)
-    index = faiss.IndexFlatIP(dim)  # IP = inner product = cosine similarity
+    index = faiss.IndexFlatIP(dim)
     index.add(dense)
     print(f"FAISS index built with {index.ntotal} vectors")
 
@@ -66,15 +108,17 @@ def save(index, vectorizer, metadata):
     faiss.write_index(index, INDEX_FILE)
     with open(META_FILE, "wb") as f:
         pickle.dump({"vectorizer": vectorizer, "metadata": metadata}, f)
-    print(f"Saved index  → {INDEX_FILE}")
-    print(f"Saved metadata → {META_FILE}")
+    print(f"\n✅ Saved index    → {INDEX_FILE}")
+    print(f"✅ Saved metadata → {META_FILE}")
 
 def main():
-    papers            = load_papers()
-    docs, metadata    = build_documents(papers)
+    docs, metadata    = load_papers_from_pdfs()
+    if not docs:
+        print("❌ No documents found! Check your papers/ folder.")
+        return
     index, vectorizer = build_index(docs)
     save(index, vectorizer, metadata)
-    print("\nAll done! RAG index is ready.")
+    print("\n🎉 RAG index built from your papers and ready!")
 
 if __name__ == "__main__":
     main()
