@@ -219,11 +219,22 @@ def build_explanation(feature_name, feature_value, shap_value, prediction_label,
         )
 
     # ── SHAP context line ─────────────────────────────────────────────
-    shap_context = (
-        f"The model's analysis shows this factor {strength} {direction} "
-        f"your risk of {prediction_label}."
+    if prediction_label == "Normal":
+        outcome_direction = "decreases" if shap_value > 0 else "increases"
+        shap_context = (
+            f"The model's analysis shows this factor {strength} {outcome_direction} "
+            f"your diabetes risk."
     )
-
+    elif prediction_label == "Prediabetes":
+        shap_context = (
+            f"The model's analysis shows this factor {strength} {direction} "
+            f"your risk of Prediabetes."
+    )
+    else:
+        shap_context = (
+            f"The model's analysis shows this factor {strength} {direction} "
+            f"your risk of Diabetic."
+    )
     # ── Extract evidence from actual paper text ───────────────────────
     evidence_parts = []
     for paper in papers:

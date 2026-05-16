@@ -188,10 +188,15 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
         shap_vals = np.array(shap_vals).flatten()[:len(feature_names)]
 
         # Sort by absolute SHAP value for better visualisation
-        sorted_idx    = np.argsort(np.abs(shap_vals))
-        sorted_names  = [feature_names[i] for i in sorted_idx]
-        sorted_vals   = shap_vals[sorted_idx]
-        sorted_colors = ['#e74c3c' if v > 0 else '#2ecc71' for v in sorted_vals]
+        sorted_idx   = np.argsort(np.abs(shap_vals))
+        sorted_names = [feature_names[i] for i in sorted_idx]
+        sorted_vals  = shap_vals[sorted_idx]
+
+        # Chart colours based on prediction class
+        if prediction_label == "Normal":
+            sorted_colors = ['#2ecc71' if v > 0 else '#e74c3c' for v in sorted_vals]
+        else:  # Diabetic or Prediabetes
+            sorted_colors = ['#e74c3c' if v > 0 else '#2ecc71' for v in sorted_vals]
 
         fig, ax = plt.subplots(figsize=(8, 4))
         ax.barh(sorted_names, sorted_vals, color=sorted_colors)
@@ -260,8 +265,7 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
 
                 retriever_key = feature_name_map.get(feat, feat)
 
-                # ── SHAP TRIAGE — mathematically driven, no if/else ──
-                # Higher SHAP magnitude = more papers retrieved
+                # ── SHAP TRIAGE — mathematically driven ──────
                 top_k  = max(1, min(5, round(abs(shap_val) * 50)))
                 papers = rag.retrieve_for_feature(retriever_key, top_k=top_k)
 
@@ -273,14 +277,16 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
                     retriever_key, val, shap_val, prediction_label, papers
                 )
 
-                # ── Icon driven entirely by SHAP direction ────
-                is_high_risk_prediction = prediction_label == "Diabetic"
-                if is_high_risk_prediction:
-                     icon             = "🔴" if shap_val > 0 else "🟢"
-                     header_direction = "increases" if shap_val > 0 else "decreases"
-                else:
+                # ── Icon and direction based on prediction class ──
+                if prediction_label == "Normal":
+                    # Positive SHAP = pushing toward Normal = good = green
                     icon             = "🟢" if shap_val > 0 else "🔴"
                     header_direction = "decreases" if shap_val > 0 else "increases"
+                else:
+                    # Diabetic or Prediabetes
+                    # Positive SHAP = pushing toward risk = bad = red
+                    icon             = "🔴" if shap_val > 0 else "🟢"
+                    header_direction = "increases" if shap_val > 0 else "decreases"
 
                 # ── Expander content ──────────────────────────
                 with st.expander(
