@@ -274,8 +274,13 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
                 )
 
                 # ── Icon driven entirely by SHAP direction ────
-                icon             = "🔴" if shap_val > 0 else "🟢"
-                header_direction = direction
+                is_high_risk_prediction = prediction_label == "Diabetic"
+                if is_high_risk_prediction:
+                     icon             = "🔴" if shap_val > 0 else "🟢"
+                     header_direction = "increases" if shap_val > 0 else "decreases"
+                else:
+                    icon             = "🟢" if shap_val > 0 else "🔴"
+                    header_direction = "decreases" if shap_val > 0 else "increases"
 
                 # ── Expander content ──────────────────────────
                 with st.expander(
