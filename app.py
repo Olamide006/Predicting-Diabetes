@@ -30,6 +30,28 @@ def clean_abstract(text):
     return text
 
 
+def clean_paper_snippet(raw_text):
+    """Extract clean readable sentences from paper text."""
+    lines = raw_text.split('.')
+    good_sentences = []
+    for line in lines:
+        line = line.strip()
+        if len(line) < 40:
+            continue
+        if any(skip in line.lower() for skip in [
+            'doi', 'http', 'www', 'pp ', 'issn', 'vol.',
+            'page', 'published by', 'copyright',
+            'open access', 'corresponding author',
+            'e-issn', 'p-issn', 'iosr', 'citation'
+        ]):
+            continue
+        good_sentences.append(line)
+    snippet = ". ".join(good_sentences[:2])
+    if len(snippet) > 250:
+        snippet = snippet[:250].rsplit(' ', 1)[0]
+    return snippet + "..." if snippet else ""
+
+
 def get_risk_explanation(prediction_label):
     if prediction_label == "Diabetic":
         return (
@@ -195,7 +217,7 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
         # Chart colours based on prediction class
         if prediction_label == "Normal":
             sorted_colors = ['#2ecc71' if v > 0 else '#e74c3c' for v in sorted_vals]
-        else:  # Diabetic or Prediabetes
+        else:
             sorted_colors = ['#e74c3c' if v > 0 else '#2ecc71' for v in sorted_vals]
 
         fig, ax = plt.subplots(figsize=(8, 4))
@@ -279,12 +301,9 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
 
                 # ── Icon and direction based on prediction class ──
                 if prediction_label == "Normal":
-                    # Positive SHAP = pushing toward Normal = good = green
                     icon             = "🟢" if shap_val > 0 else "🔴"
                     header_direction = "decreases" if shap_val > 0 else "increases"
                 else:
-                    # Diabetic or Prediabetes
-                    # Positive SHAP = pushing toward risk = bad = red
                     icon             = "🔴" if shap_val > 0 else "🟢"
                     header_direction = "increases" if shap_val > 0 else "decreases"
 
@@ -299,11 +318,17 @@ if st.button("Predict Diabetes Risk", use_container_width=True):
                     if papers:
                         st.write(f"**Supporting research ({len(papers)} papers):**")
                         for i, paper in enumerate(papers, 1):
-                            clean_title   = clean_abstract(paper['title'])
-                            clean_snippet = clean_abstract(paper['abstract'])
-                            snippet       = clean_snippet[:200].rsplit(' ', 1)[0] + "..."
+                            # Clean title
+                            raw_title   = paper['title'].replace(".pdf", "").replace("_", " ").strip()
+                            clean_title = clean_abstract(raw_title)
+
+                            # Clean snippet
+                            raw_text = paper.get('full_text', paper.get('abstract', ''))
+                            snippet  = clean_paper_snippet(raw_text)
+
                             st.write(f"**{i}.** {clean_title} ({paper['year']})")
-                            st.write(snippet)
+                            if snippet:
+                                st.write(f"*{snippet}*")
                             if i < len(papers):
                                 st.write("---")
                     else:

@@ -9,7 +9,7 @@ import re
 INDEX_FILE = "rag_index.faiss"
 META_FILE  = "rag_metadata.pkl"
 
-RELEVANCE_THRESHOLD = 0.10  # lowered because we now use full PDF text
+RELEVANCE_THRESHOLD = 0.10
 
 FEATURE_QUERIES = {
     "age":                  "aging older adults diabetes incidence risk Africa age-related",
@@ -28,7 +28,6 @@ DIABETES_KEYWORDS = [
 
 
 def clean_text(text):
-    """Clean extracted PDF text."""
     if not text:
         return ""
     text = re.sub(r'<[^>]+>', '', text)
@@ -37,10 +36,6 @@ def clean_text(text):
 
 
 def extract_evidence_sentences(full_text, feature_name, max_sentences=2):
-    """
-    Extract the most relevant sentences from a paper's full text
-    based on the feature being explained.
-    """
     feature_keywords = {
         "age":                  ["age", "older", "aging", "elderly", "middle-aged", "years old"],
         "bmi":                  ["bmi", "obesity", "obese", "overweight", "body mass", "adipos"],
@@ -51,10 +46,8 @@ def extract_evidence_sentences(full_text, feature_name, max_sentences=2):
         "hypertension":         ["hypertension", "blood pressure", "systolic", "diastolic"],
     }
 
-    key = feature_name.lower().replace(" ", "_")
-    keywords = feature_keywords.get(key, [feature_name])
-
-    # Split into sentences
+    key       = feature_name.lower().replace(" ", "_")
+    keywords  = feature_keywords.get(key, [feature_name])
     sentences = re.split(r'(?<=[.!?])\s+', full_text)
 
     relevant = []
@@ -62,8 +55,7 @@ def extract_evidence_sentences(full_text, feature_name, max_sentences=2):
         sent = sent.strip()
         if len(sent) < 40 or len(sent) > 400:
             continue
-        sent_lower = sent.lower()
-        # Must contain a diabetes keyword AND a feature keyword
+        sent_lower   = sent.lower()
         has_diabetes = any(kw in sent_lower for kw in DIABETES_KEYWORDS)
         has_feature  = any(kw in sent_lower for kw in keywords)
         if has_diabetes and has_feature:
@@ -73,11 +65,6 @@ def extract_evidence_sentences(full_text, feature_name, max_sentences=2):
 
 
 def build_explanation(feature_name, feature_value, shap_value, prediction_label, papers):
-    """
-    Build a paper-grounded explanation for a feature's contribution.
-    SHAP value determines strength/direction.
-    Papers provide the actual evidence sentences.
-    """
     direction = "increases" if shap_value > 0 else "decreases"
     strength  = (
         "strongly"   if abs(shap_value) > 0.1  else
@@ -87,7 +74,6 @@ def build_explanation(feature_name, feature_value, shap_value, prediction_label,
 
     key = feature_name.lower().replace(" ", "_")
 
-    # ── Patient-facing opening based on feature + value ──────────────
     if key == "age":
         age = int(feature_value)
         if age >= 45:
@@ -111,29 +97,50 @@ def build_explanation(feature_name, feature_value, shap_value, prediction_label,
 
     elif key == "bmi":
         bmi = float(feature_value)
-        if bmi >= 35:
+        if prediction_label == "Normal" and shap_value < 0:
+            if bmi >= 25:
+                opening = (
+                    f"Your BMI of {bmi:.1f} places you in the overweight range. "
+                    f"While other factors are protecting you overall, elevated BMI "
+                    f"remains a risk factor worth monitoring. Maintaining a healthy "
+                    f"weight through diet and exercise is strongly recommended."
+                )
+            else:
+                opening = (
+                    f"Your BMI of {bmi:.1f} is within the healthy range. "
+                    f"However the model shows this factor slightly working against "
+                    f"your Normal classification in this specific profile."
+                )
+        elif prediction_label == "Normal" and shap_value > 0:
             opening = (
-                f"Your BMI of {bmi:.1f} falls in the severely obese range. "
-                f"At this level, insulin resistance is highly likely and even modest weight "
-                f"loss of 5-10% can significantly improve blood sugar regulation."
-            )
-        elif bmi >= 30:
-            opening = (
-                f"Your BMI of {bmi:.1f} falls in the obese range. Excess body fat, "
-                f"particularly around the abdomen, directly impairs the body's ability "
-                f"to use insulin effectively, raising diabetes risk substantially."
-            )
-        elif bmi >= 25:
-            opening = (
-                f"Your BMI of {bmi:.1f} places you in the overweight range. "
-                f"This puts additional strain on insulin-producing cells and raises "
-                f"your risk of developing type 2 diabetes over time."
+                f"Your BMI of {bmi:.1f} is contributing positively to your low risk "
+                f"classification. "
+                f"{'A healthy BMI reduces strain on insulin-producing cells.' if bmi < 25 else 'Continue working toward a healthier weight range.'}"
             )
         else:
-            opening = (
-                f"Your BMI of {bmi:.1f} is within the healthy range, which is a "
-                f"positive protective factor against type 2 diabetes."
-            )
+            if bmi >= 35:
+                opening = (
+                    f"Your BMI of {bmi:.1f} falls in the severely obese range. "
+                    f"At this level, insulin resistance is highly likely and even modest weight "
+                    f"loss of 5-10% can significantly improve blood sugar regulation."
+                )
+            elif bmi >= 30:
+                opening = (
+                    f"Your BMI of {bmi:.1f} falls in the obese range. Excess body fat, "
+                    f"particularly around the abdomen, directly impairs the body's ability "
+                    f"to use insulin effectively, raising diabetes risk substantially."
+                )
+            elif bmi >= 25:
+                opening = (
+                    f"Your BMI of {bmi:.1f} places you in the overweight range. "
+                    f"This puts additional strain on insulin-producing cells and raises "
+                    f"your risk of developing type 2 diabetes over time."
+                )
+            else:
+                opening = (
+                    f"Your BMI of {bmi:.1f} is within the healthy range, which is a "
+                    f"positive protective factor against type 2 diabetes."
+                )
 
     elif key == "sex":
         if feature_value == 0:
@@ -143,11 +150,15 @@ def build_explanation(feature_name, feature_value, shap_value, prediction_label,
                 "These factors can reduce insulin sensitivity and raise diabetes risk over time."
             )
         else:
-            if shap_value < 0:
+            if shap_value < 0 and prediction_label in ["Diabetic", "Prediabetes"]:
                 opening = (
                     "Being male is associated with a relatively lower diabetes risk in this "
-                    "profile compared to other factors present. Maintaining a healthy weight "
-                    "and staying active remains the best protection."
+                    "profile. Maintaining a healthy weight and staying active remains the best protection."
+                )
+            elif shap_value < 0 and prediction_label == "Normal":
+                opening = (
+                    "Being male introduces some metabolic risk factors such as visceral fat "
+                    "accumulation even at lower BMI levels, which can affect insulin sensitivity."
                 )
             else:
                 opening = (
@@ -192,25 +203,50 @@ def build_explanation(feature_name, feature_value, shap_value, prediction_label,
                 "leading to higher blood glucose levels over time."
             )
         else:
-            opening = (
-                "Being physically active is one of the most effective protections against "
-                "type 2 diabetes. Exercise directly improves insulin sensitivity and helps "
-                "regulate blood glucose levels."
-            )
+            if shap_value > 0 and prediction_label in ["Diabetic", "Prediabetes"]:
+                opening = (
+                    "Although you are physically active, other dominant risk factors in your "
+                    "profile are outweighing this protective effect in the model's assessment. "
+                    "Continue staying active as it remains one of the most important lifestyle "
+                    "protections against diabetes progression."
+                )
+            else:
+                opening = (
+                    "Being physically active is one of the most effective protections against "
+                    "type 2 diabetes. Exercise directly improves insulin sensitivity and helps "
+                    "regulate blood glucose levels."
+                )
 
     elif key == "hypertension":
         if feature_value == 1:
-            opening = (
-                "Hypertension and type 2 diabetes share common underlying mechanisms including "
-                "insulin resistance, inflammation, and vascular dysfunction. People with high "
-                "blood pressure are roughly twice as likely to develop type 2 diabetes."
-            )
+            if prediction_label == "Normal" and shap_value < 0:
+                opening = (
+                    "Although you have hypertension, other protective factors in your "
+                    "profile such as physical activity and healthy BMI are outweighing "
+                    "this risk. However, managing blood pressure remains important for "
+                    "long-term diabetes prevention."
+                )
+            else:
+                opening = (
+                    "Hypertension and type 2 diabetes share common underlying mechanisms "
+                    "including insulin resistance, inflammation, and vascular dysfunction. "
+                    "People with high blood pressure are roughly twice as likely to develop "
+                    "type 2 diabetes."
+                )
         else:
-            opening = (
-                "Normal blood pressure is a positive metabolic indicator. The absence of "
-                "hypertension reduces one significant pathway toward diabetes development. "
-                "Continue maintaining healthy blood pressure through diet and exercise."
-            )
+            if prediction_label in ["Diabetic", "Prediabetes"] and shap_value > 0:
+                opening = (
+                    "Despite having normal blood pressure, other risk factors in your "
+                    "profile are driving this prediction. The absence of hypertension "
+                    "offers some protection but is not sufficient to offset the other "
+                    "risk factors present."
+                )
+            else:
+                opening = (
+                    "Normal blood pressure is a positive metabolic indicator. The absence "
+                    "of hypertension reduces one significant pathway toward diabetes development. "
+                    "Continue maintaining healthy blood pressure through diet and exercise."
+                )
 
     else:
         opening = (
@@ -224,17 +260,18 @@ def build_explanation(feature_name, feature_value, shap_value, prediction_label,
         shap_context = (
             f"The model's analysis shows this factor {strength} {outcome_direction} "
             f"your diabetes risk."
-    )
+        )
     elif prediction_label == "Prediabetes":
         shap_context = (
             f"The model's analysis shows this factor {strength} {direction} "
             f"your risk of Prediabetes."
-    )
+        )
     else:
         shap_context = (
             f"The model's analysis shows this factor {strength} {direction} "
             f"your risk of Diabetic."
-    )
+        )
+
     # ── Extract evidence from actual paper text ───────────────────────
     evidence_parts = []
     for paper in papers:
@@ -252,7 +289,7 @@ def build_explanation(feature_name, feature_value, shap_value, prediction_label,
 
     # ── Combine into final explanation ────────────────────────────────
     if evidence_parts:
-        evidence_block = " | ".join(evidence_parts[:2])  # max 2 paper citations
+        evidence_block = " | ".join(evidence_parts[:2])
         detail = f"{opening} {shap_context} {evidence_block}."
     else:
         detail = f"{opening} {shap_context}"
@@ -298,9 +335,9 @@ class RAGRetriever:
             if float(score) < RELEVANCE_THRESHOLD:
                 continue
 
-            paper          = self.metadata[idx].copy()
-            full_text      = paper.get("full_text", paper.get("abstract", "")).lower()
-            title_lower    = paper.get("title", "").lower()
+            paper       = self.metadata[idx].copy()
+            full_text   = paper.get("full_text", paper.get("abstract", "")).lower()
+            title_lower = paper.get("title", "").lower()
 
             is_diabetes_relevant = any(
                 kw in full_text or kw in title_lower
@@ -335,7 +372,5 @@ if __name__ == "__main__":
         if papers:
             for p in papers:
                 print(f"  [{p['score']:.3f}] {p['title']} ({p['year']})")
-                sentences = p.get("full_text", "")[:500]
-                print(f"  Preview: {sentences[:200]}")
         else:
             print("  No relevant papers found above threshold.")
